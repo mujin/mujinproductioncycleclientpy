@@ -38,13 +38,17 @@ class GraphQLClient(object):
                 }
             }
         })
-        requests.post(
+        response = requests.post(
             url=self._url,
             headers=self._headers,
             cookies=self._cookies,
             auth=self._auth,
             data=data,
         )
+        responseJson = response.json()
+        if 'errors' in responseJson:
+            # command failed
+            raise Exception('Failed to set io variables for %r. response: %s' % (ioNameValues, responseJson))
 
     def GetControllerIOVariable(self, ioName):
         """ Sends GraphQL query to get single IO variable from Mujin controller.
@@ -57,7 +61,7 @@ class GraphQLClient(object):
         """
         query = """
             mutation GetControllerIOVariable($parameters: Any!) {
-                CommandRobotBridges(command: "GetControllerIOVariables", parameters: $parameters)
+                CommandRobotBridges(command: "GetControllerIOVariable", parameters: $parameters)
             }
         """
         data = json.dumps({
