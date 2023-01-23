@@ -20,6 +20,11 @@ class GraphQLClient(object):
         self._auth = requests.auth.HTTPBasicAuth(username, password)
 
     def SetControllerIOVariables(self, ioNameValues):
+        """ Sends GraphQL query to set IO variables to Mujin controller.
+
+        Args:
+            ioNameValues (list(tuple(ioName, ioValue))): List of tuple(ioName, ioValue) for IO variables to set
+        """
         query = """
             mutation SetControllerIOVariables($parameters: Any!) {         
                 CommandRobotBridges(command: "SetControllerIOVariables", parameters: $parameters)
@@ -33,7 +38,7 @@ class GraphQLClient(object):
                 }
             }
         })
-        return requests.post(
+        requests.post(
             url=self._url,
             headers=self._headers,
             cookies=self._cookies,
@@ -73,39 +78,66 @@ class GraphQLClient(object):
         return parameterValues
 
     def GetControllerIOVariable(self, parameterName):
+        """ Sends GraphQL query to get single IO variable from Mujin controller.
+
+        Args:
+            parameterName (str): Name of IO variable to get.
+
+        Returns:
+            Value of IO variable.
+        """
         parameterValues = self._GetControllerIOVariables([parameterName])
         return parameterValues[0]
 
     def GetControllerIOVariables(self, parameterNames):
+        """ Sends GraphQL query to get multiple IO variables from Mujin controller.
+
+        Args:
+            parameterNames (list(str)): List of names for IO variables to get.
+
+        Returns:
+            dict: Mapping of IO name to IO value for queried IO variables.
+        """
         parameterValues = self._GetControllerIOVariables(parameterNames)
         return dict(zip(parameterNames, parameterValues))
 
 class ProductionCycleOrderManager(object):
-    orderQueueIOName = 'productionQueue1Order'
-    resultQueueIOName = 'productionQueue1Result'
+    orderQueueIOName = 'productionQueue1Order'                    # io name of order request queue
+    resultQueueIOName = 'productionQueue1Result'                  # io name of order result queue
 
-    orderReadPointerIOName = 'location1OrderReadPointer'
-    orderWritePointerIOName = 'location1OrderWritePointer'
-    resultReadPointerIOName = 'location1OrderResultReadPointer'
-    resultWritePointerIOName = 'location1OrderResultWritePointer'
+    orderReadPointerIOName = 'location1OrderReadPointer'          # io name of order request read pointer
+    orderWritePointerIOName = 'location1OrderWritePointer'        # io name of order request write pointer
+    resultReadPointerIOName = 'location1OrderResultReadPointer'   # io name of order result read pointer
+    resultWritePointerIOName = 'location1OrderResultWritePointer' # io name of order result write pointer
 
-    orderWritePointer = 0
-    resultReadPointer = 0
-    queueLength = 0
+    orderWritePointer = 0 # value of current order request write pointer
+    resultReadPointer = 0 # value of current order result write pointer
+    queueLength = 0       # length of order request queue
 
-    _graphQLClient = None
+    _graphQLClient = None # instance of GraphQLClient
 
     def __init__(self, graphQLClient):
         self._graphQLClient = graphQLClient
         self.InitializeOrderPointers()
 
     def _IncrementPointer(self, pointerValue):
+        """ Increments value for an order queue pointer. Wraps around length of order queue.
+
+        Args:
+            pointerValue (int): Value of order queue pointer to be incremented.
+
+        Returns:
+            int: Incremented pointerValue.
+        """
         pointerValue += 1
         if pointerValue > self.queueLength:
             pointerValue = 1
         return pointerValue
 
     def InitializeOrderPointers(self):
+        """ Sends GraphQL query to get order queue pointers and order queue length
+        """
+        # send graphQL query
         ioNameValues = self._graphQLClient.GetControllerIOVariables([
             self.orderReadPointerIOName,
             self.orderWritePointerIOName,
@@ -118,7 +150,8 @@ class ProductionCycleOrderManager(object):
         self.resultReadPointer = ioNameValues[self.resultReadPointerIOName]
         orderReadPointer = ioNameValues[self.orderReadPointerIOName]
         resultWritePointer = ioNameValues[self.resultWritePointerIOName]
-        
+
+        # verify order queue pointer values are valid
         for pointerValue, orderPointerIOName in [
             (self.orderWritePointer, self.orderWritePointerIOName),
             (self.resultReadPointer,  self.resultReadPointerIOName),
@@ -126,9 +159,14 @@ class ProductionCycleOrderManager(object):
             (resultWritePointer, self.resultWritePointerIOName),
         ]:
             if pointerValue < 1 or pointerValue > self.queueLength:
-                raise Exception('Production cycle queue pointers are invalid, "%s" signal has value %r' % (orderPointerIOName, pointerValue))
+                raise Exception('Production cycle order queue pointers are invalid, "%s" signal has value %r' % (orderPointerIOName, pointerValue))
 
     def QueueOrder(self, orderEntry):
+        """ Queues an order entry to the order queue.
+
+        Args:
+            orderEntry (dict): Order information to queue to the system.
+        """
         # queue order to next entry in order queue and increment the order write pointer
         orderReadPointer = self._graphQLClient.GetControllerIOVariable(self.orderReadPointerIOName)
 
@@ -145,6 +183,11 @@ class ProductionCycleOrderManager(object):
         ])
 
     def ReadNextOrderResult(self):
+        """ Reads next result entry in order result queue.
+
+        returns:
+            dict: Order result information. None if there is no result entry to be read.
+        """
         # reads next order result from order result queue and increment the order result read pointer
         resultEntry = None
         resultWritePointer = self._graphQLClient.GetControllerIOVariable(self.resultWritePointerIOName)
