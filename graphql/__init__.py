@@ -46,9 +46,17 @@ class GraphQLClient(object):
             data=data,
         )
 
-    def _GetControllerIOVariables(self, parameterNames):
+    def GetControllerIOVariable(self, ioName):
+        """ Sends GraphQL query to get single IO variable from Mujin controller.
+
+        Args:
+            ioName (str): Name of IO variable to get.
+
+        Returns:
+            Value of IO variable.
+        """
         query = """
-            mutation GetControllerIOVariables($parameters: Any!) {
+            mutation GetControllerIOVariable($parameters: Any!) {
                 CommandRobotBridges(command: "GetControllerIOVariables", parameters: $parameters)
             }
         """
@@ -56,7 +64,7 @@ class GraphQLClient(object):
             'query': query,
             'variables': {
                 'parameters': {
-                    'parameternames': parameterNames
+                    'parametername': ioName
                 }
             }
         })
@@ -70,36 +78,51 @@ class GraphQLClient(object):
         responseJson = response.json()
         if 'errors' in responseJson:
             # command failed
-            raise Exception('Failed to get io variables for parameterNames %r. response: %s' % (parameterNames, responseJson))
-        parameterValues = responseJson.get('data', {}).get('CommandRobotBridges', {}).get('parametervalue')
-        if parameterValues is None or len(parameterNames) != len(parameterValues):
+            raise Exception('Failed to get io variables for IO name %r. response: %s' % (ioName, responseJson))
+        parameterValue = responseJson.get('data', {}).get('CommandRobotBridges', {}).get('parametervalue')
+        if parameterValue is None:
             # failed to fetch parameter values
-            raise Exception('Failed to get io variables for parameterNames %r. response: %r' % (parameterNames, responseJson))
-        return parameterValues
+            raise Exception('Failed to get io variables for IO name %r. response: %r' % (ioName, responseJson))
+        return parameterValue
 
-    def GetControllerIOVariable(self, parameterName):
-        """ Sends GraphQL query to get single IO variable from Mujin controller.
-
-        Args:
-            parameterName (str): Name of IO variable to get.
-
-        Returns:
-            Value of IO variable.
-        """
-        parameterValues = self._GetControllerIOVariables([parameterName])
-        return parameterValues[0]
-
-    def GetControllerIOVariables(self, parameterNames):
+    def GetControllerIOVariables(self, ioNames):
         """ Sends GraphQL query to get multiple IO variables from Mujin controller.
 
         Args:
-            parameterNames (list(str)): List of names for IO variables to get.
+            ioNames (list(str)): List of IO names for IO variables to get.
 
         Returns:
             dict: Mapping of IO name to IO value for queried IO variables.
         """
-        parameterValues = self._GetControllerIOVariables(parameterNames)
-        return dict(zip(parameterNames, parameterValues))
+        query = """
+            mutation GetControllerIOVariables($parameters: Any!) {
+                CommandRobotBridges(command: "GetControllerIOVariables", parameters: $parameters)
+            }
+        """
+        data = json.dumps({
+            'query': query,
+            'variables': {
+                'parameters': {
+                    'parameternames': ioNames
+                }
+            }
+        })
+        response = requests.post(
+            url=self._url,
+            headers=self._headers,
+            cookies=self._cookies,
+            auth=self._auth,
+            data=data,
+        )
+        responseJson = response.json()
+        if 'errors' in responseJson:
+            # command failed
+            raise Exception('Failed to get io variables for IO names %r. response: %s' % (ioNames, responseJson))
+        parameterValues = responseJson.get('data', {}).get('CommandRobotBridges', {}).get('parametervalue')
+        if parameterValues is None or len(ioNames) != len(parameterValues):
+            # failed to fetch parameter values
+            raise Exception('Failed to get io variables for IO names %r. response: %r' % (ioNames, responseJson))
+        return dict(zip(ioNames, parameterValues))
 
 class ProductionCycleOrderManager(object):
     orderQueueIOName = 'productionQueue1Order'                    # io name of order request queue
