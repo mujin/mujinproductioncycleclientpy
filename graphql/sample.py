@@ -102,7 +102,7 @@ def _Main():
     resultEntry = None
     while resultEntry is None:
         resultEntry = orderManager.ReadNextOrderResult()
-    print('Queued order: %r' % orderEntry)
+    print('Read order result: %r' % orderEntry)
 
 if __name__ == "__main__":
     _Main()
