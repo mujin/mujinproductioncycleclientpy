@@ -87,7 +87,7 @@ def _Main():
         # handle move in for destination location
         if not handledMoveOutForDest and graphQLClient.GetControllerIOVariable('moveOutLocation2Container'):
             ioNameValues += [
-                ('location2ContainerId', '')      # reset container ID
+                ('location2ContainerId', ''),      # reset container ID
                 ('location2HasContainer', False), # hasContainer set False
             ]
             handledMoveOutForDest = True
