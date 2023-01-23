@@ -2,10 +2,10 @@ import json
 import requests
 
 class GraphQLClient(object):
-    _url = None
-    _headers = None
-    _cookies = None
-    _auth = None
+    _url = None     # URL to graphQL endpoint on Mujin controller
+    _headers = None # request headers information
+    _cookies = None # request cookies information
+    _auth = None    # request auth information
 
     def __init__(self, controllerUrl='http://localhost', username='mujin', password='mujin'):
         self._url = '%s/api/v2/graphql' % controllerUrl
