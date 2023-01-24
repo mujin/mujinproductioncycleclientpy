@@ -1,23 +1,63 @@
+import base64
 import json
 import requests
+import time
+from python_graphql_client import GraphqlClient
 
-class GraphQLClient(object):
-    _url = None     # URL to graphQL endpoint on Mujin controller
+class MujinGraphqlClient(object):
+    _httpUrl = None # URL to http GraphQL endpoint on Mujin controller
     _headers = None # request headers information
     _cookies = None # request cookies information
-    _auth = None    # request auth information
 
-    def __init__(self, controllerUrl='http://localhost', username='mujin', password='mujin'):
-        self._url = '%s/api/v2/graphql' % controllerUrl
+    _websocketUrl = None           # URL to websocket GraphQL endpoint on Mujin controller
+    _websocketGraphqlClient = None # instance of GraphqlClient
+
+    robotBridgeState = None # dict storing last received RobotBridgesState from subscription
+
+    def __init__(self, host='localhost:1234', username='mujin', password='mujin'):
+        self._httpUrl = 'http://%s/api/v2/graphql' % host
+        self._websocketUrl = 'ws://%s/api/v2/graphql' % host
+        self.robotBridgeState = {}
+
+        token = '%s:%s' % (username, password)
+        encodedToken = base64.b64encode(token.encode('utf-8')).decode('ascii')
         self._headers = {
             'Content-Type': 'application/json',
             'Accept': 'application/json',
             'X-CSRFToken': 'token',
+            'Authorization': 'Basic %s' % encodedToken
         }
         self._cookies = {
             'csrftoken': 'token'
         }
-        self._auth = requests.auth.HTTPBasicAuth(username, password)
+
+        self._websocketGraphqlClient = GraphqlClient(
+            endpoint=self._websocketUrl,
+            headers=self._headers,
+        )
+
+    @property
+    def receivedIoMap(self):
+        return dict(self.robotBridgeState.get('receivediovalues', {}))
+
+    @property
+    def sentIoMap(self):
+        return dict(self.robotBridgeState.get('sentiovalues', {}))
+
+    async def SubscribeRobotBridgesState(self):
+        query = """
+            subscription {
+                SubscribeRobotBridgesState {
+                    sentiovalues
+                    receivediovalues
+                }
+            }
+        """
+        def _Callback(response):
+            # update with response robotBridgeState
+            robotBridgeState = response.get('data', {}).get('SubscribeRobotBridgesState') or {}
+            self.robotBridgeState.update(robotBridgeState)
+        await self._websocketGraphqlClient.subscribe(query=query, handle=_Callback)
 
     def SetControllerIOVariables(self, ioNameValues):
         """ Sends GraphQL query to set IO variables to Mujin controller.
@@ -26,7 +66,7 @@ class GraphQLClient(object):
             ioNameValues (list(tuple(ioName, ioValue))): List of tuple(ioName, ioValue) for IO variables to set
         """
         query = """
-            mutation SetControllerIOVariables($parameters: Any!) {         
+            mutation SetControllerIOVariables($parameters: Any!) {
                 CommandRobotBridges(command: "SetControllerIOVariables", parameters: $parameters)
             }
         """
@@ -39,10 +79,9 @@ class GraphQLClient(object):
             }
         })
         response = requests.post(
-            url=self._url,
+            url=self._httpUrl,
             headers=self._headers,
             cookies=self._cookies,
-            auth=self._auth,
             data=data,
         )
         responseJson = response.json()
@@ -73,10 +112,9 @@ class GraphQLClient(object):
             }
         })
         response = requests.post(
-            url=self._url,
+            url=self._httpUrl,
             headers=self._headers,
             cookies=self._cookies,
-            auth=self._auth,
             data=data,
         )
         responseJson = response.json()
@@ -112,10 +150,9 @@ class GraphQLClient(object):
             }
         })
         response = requests.post(
-            url=self._url,
+            url=self._httpUrl,
             headers=self._headers,
             cookies=self._cookies,
-            auth=self._auth,
             data=data,
         )
         responseJson = response.json()
@@ -161,32 +198,35 @@ class ProductionCycleOrderManager(object):
             pointerValue = 1
         return pointerValue
 
-    def InitializeOrderPointers(self):
+    def InitializeOrderPointers(self, timeout=5):
         """ Sends GraphQL query to get order queue pointers and order queue length
         """
-        # send graphQL query
-        ioNameValues = self._graphQLClient.GetControllerIOVariables([
-            self.orderReadPointerIOName,
-            self.orderWritePointerIOName,
-            self.resultReadPointerIOName,
-            self.resultWritePointerIOName,
-            self.orderQueueIOName,
-        ])
-        self.queueLength = len(ioNameValues[self.orderQueueIOName])
-        self.orderWritePointer = ioNameValues[self.orderWritePointerIOName]
-        self.resultReadPointer = ioNameValues[self.resultReadPointerIOName]
-        orderReadPointer = ioNameValues[self.orderReadPointerIOName]
-        resultWritePointer = ioNameValues[self.resultWritePointerIOName]
+        starttime = time.time()
 
-        # verify order queue pointer values are valid
-        for pointerValue, orderPointerIOName in [
-            (self.orderWritePointer, self.orderWritePointerIOName),
-            (self.resultReadPointer,  self.resultReadPointerIOName),
-            (orderReadPointer, self.orderReadPointerIOName),
-            (resultWritePointer, self.resultWritePointerIOName),
-        ]:
-            if pointerValue < 1 or pointerValue > self.queueLength:
-                raise Exception('Production cycle order queue pointers are invalid, "%s" signal has value %r' % (orderPointerIOName, pointerValue))
+        # initialize order queue length from order queue
+        orderQueue = self._graphQLClient.GetControllerIOVariable(self.orderQueueIOName)
+        self.queueLength = len(orderQueue)
+
+        # initalize order pointers
+        initializedOrderPointers = False
+        while not initializedOrderPointers:
+            self.orderWritePointer = self._graphQLClient.receivedIoMap.get(self.orderWritePointerIOName) or 0
+            self.resultReadPointer = self._graphQLClient.receivedIoMap.get(self.resultReadPointerIOName) or 0
+            orderReadPointer = self._graphQLClient.receivedIoMap.get(self.orderReadPointerIOName) or 0
+            resultWritePointer = self._graphQLClient.receivedIoMap.get(self.resultWritePointerIOName) or 0
+
+            # verify order queue pointer values are valid
+            initializedOrderPointers = True
+            for pointerValue, orderPointerIOName in [
+                (self.orderWritePointer, self.orderWritePointerIOName),
+                (self.resultReadPointer,  self.resultReadPointerIOName),
+                (orderReadPointer, self.orderReadPointerIOName),
+                (resultWritePointer, self.resultWritePointerIOName),
+            ]:
+                if pointerValue < 1 or pointerValue > self.queueLength:
+                    initializedOrderPointers = False
+                    if time.time() - starttime > timeout:
+                        raise Exception('Production cycle order queue pointers are invalid, "%s" signal has value %r' % (orderPointerIOName, pointerValue))
 
     def QueueOrder(self, orderEntry):
         """ Queues an order entry to the order queue.
@@ -195,7 +235,7 @@ class ProductionCycleOrderManager(object):
             orderEntry (dict): Order information to queue to the system.
         """
         # queue order to next entry in order queue and increment the order write pointer
-        orderReadPointer = self._graphQLClient.GetControllerIOVariable(self.orderReadPointerIOName)
+        orderReadPointer = self._graphQLClient.receivedIoMap.get(self.orderReadPointerIOName) or 0
 
         # check if order queue is full
         if self._IncrementPointer(self.orderWritePointer) == orderReadPointer:
@@ -209,15 +249,15 @@ class ProductionCycleOrderManager(object):
             (self.orderWritePointerIOName, self.orderWritePointer)
         ])
 
-    def ReadNextOrderResult(self):
-        """ Reads next result entry in order result queue.
+    def DequeueOrderResult(self):
+        """ Dequeues next result entry in order result queue.
 
         returns:
             dict: Order result information. None if there is no result entry to be read.
         """
         # reads next order result from order result queue and increment the order result read pointer
         resultEntry = None
-        resultWritePointer = self._graphQLClient.GetControllerIOVariable(self.resultWritePointerIOName)
+        resultWritePointer = self._graphQLClient.receivedIoMap.get(self.resultWritePointerIOName) or 0
         if self.resultReadPointer != resultWritePointer:
             orderResultQueueEntryIOName = '%s[%d]' % (self.resultQueueIOName, self.resultReadPointer - 1)
             resultEntry = self._graphQLClient.GetControllerIOVariable(orderResultQueueEntryIOName)

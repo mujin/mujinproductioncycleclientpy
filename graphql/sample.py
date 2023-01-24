@@ -1,29 +1,68 @@
 #!/usr/bin/env python
 
-import time
-from graphql import GraphQLClient, ProductionCycleOrderManager
+import asyncio
+from graphql import MujinGraphqlClient, ProductionCycleOrderManager
 
-def _Main():
+async def _Main():
+    host = 'localhost:1234' # TODO: IP of Mujin controller
 
-    controllerUrl = 'http://localhost' # URL of Mujin controller
     # GraphQLClient to set and get controller io variables
-    graphQLClient = GraphQLClient(controllerUrl=controllerUrl)
+    graphqlClient = MujinGraphqlClient(host=host)
+
+    await asyncio.gather(
+        graphqlClient.SubscribeRobotBridgesState(),
+        _ManageProductionCycle(graphqlClient),
+    )
+
+async def _ManageProductionCycle(graphqlClient):
     # ProductionCycleOrderManager to manage order pointers, queue orders, and read order results
-    orderManager = ProductionCycleOrderManager(graphQLClient)
+    orderManager = ProductionCycleOrderManager(graphqlClient)
 
     # start production cycle
-    while not graphQLClient.GetControllerIOVariable('isRunningProductionCycle'):
-        graphQLClient.SetControllerIOVariables([
+    StartProductionCycle(graphqlClient)
+
+    # queue an order
+    orderEntry = QueueOrder(orderManager)
+
+    await asyncio.gather(
+        # handle location move in and out for source location
+        HandleLocationMove(
+            graphqlClient=graphqlClient,
+            locationName='source',
+            containerId=orderEntry['orderPickContainerId'],
+            containerIdIOName='location1ContainerId',
+            hasContainerIOName='location1HasContainer',
+            moveInIOName='moveInLocation1Container',
+            moveOutIOName='moveOutLocation1Container',
+        ),
+        # handle location move in and out for destination location
+        HandleLocationMove(
+            graphqlClient,
+            locationName='destination',
+            containerId=orderEntry['orderPlaceContainerId'],
+            containerIdIOName='location2ContainerId',
+            hasContainerIOName='location2HasContainer',
+            moveInIOName='moveInLocation2Container',
+            moveOutIOName='moveOutLocation2Container',
+        ),
+        DequeueOrderResults(orderManager),
+    )
+
+def StartProductionCycle(graphqlClient):
+    # start production cycle
+    if not graphqlClient.sentIoMap.get('isRunningProductionCycle'):
+        graphqlClient.SetControllerIOVariables([
             ('startProductionCycle', True)
         ])
-        time.sleep(0.1)
-
-    # after production cycle is running, set trigger off
-    graphQLClient.SetControllerIOVariables([
+    # wait for production cycle to start running
+    while not graphqlClient.sentIoMap.get('isRunningProductionCycle'):
+        pass
+    # set trigger off
+    graphqlClient.SetControllerIOVariables([
         ('startProductionCycle', False)
     ])
 
-    # queue an order
+def QueueOrder(orderManager):
     sourceContainerId = 'source0001'
     destContainerId = 'dest0001'
     orderEntry = {
@@ -36,74 +75,46 @@ def _Main():
     }
     orderManager.QueueOrder(orderEntry)
     print('Queued order: %r' % orderEntry)
+    return orderEntry
 
-    # set source location and destination location container IDs matching the sent orderEntry
-    graphQLClient.SetControllerIOVariables([
-        ('location1ContainerId', sourceContainerId),
-        ('location2ContainerId', destContainerId),
-    ])
+async def DequeueOrderResults(orderManager):
+    while True:
+        # read the order result
+        if (resultEntry := orderManager.DequeueOrderResult()) is not None:
+            print('Read order result: %r' % resultEntry)
 
-    # handle move in for source and destination locations
-    handledMoveInForSource = False
-    handledMoveInForDest = False
-    while not handledMoveInForSource or not handledMoveInForDest:
+        await asyncio.sleep(0.01) # sleep this coroutine to allow other coroutines to run
+
+async def HandleLocationMove(graphqlClient, locationName, containerId, containerIdIOName, hasContainerIOName, moveInIOName, moveOutIOName):
+    hasContainer = graphqlClient.sentIoMap.get(hasContainerIOName)
+    while True:
         ioNameValues = []
+        isMoveIn = graphqlClient.sentIoMap.get(moveInIOName)
+        isMoveOut = graphqlClient.sentIoMap.get(moveOutIOName)
 
-        # handle move in for source location
-        if not handledMoveInForSource and graphQLClient.GetControllerIOVariable('moveInLocation1Container'):
+        # handle move in
+        if isMoveIn and not hasContainer:
             ioNameValues += [
-                ('location1HasContainer', True), # hasContainer set True
+                (containerIdIOName, containerId), # set container ID
+                (hasContainerIOName, True),       # hasContainer set True
             ]
-            handledMoveInForSource = True
-            print('Moved in "%s" to source location.' % sourceContainerId)
+            hasContainer = True
+            print('Moved in "%s" to %s location.' % (containerId, locationName))
 
-        # handle move in for destination location
-        if not handledMoveInForDest and graphQLClient.GetControllerIOVariable('moveInLocation2Container'):
+        # handle move out
+        elif isMoveOut and hasContainer:
             ioNameValues += [
-                ('location2HasContainer', True), # hasContainer set True
+                (containerIdIOName, ''),     # reset container ID
+                (hasContainerIOName, False), # hasContainer set False
             ]
-            handledMoveInForDest = True
-            print('Moved in "%s" to destination location.' % destContainerId)
+            hasContainer = False
+            print('Moved out %s of %s location.' % (containerId, locationName))
 
         # set ioNameValues over graphQL
         if len(ioNameValues) > 0:
-            graphQLClient.SetControllerIOVariables(ioNameValues)
-        time.sleep(0.1)
+            graphqlClient.SetControllerIOVariables(ioNameValues)
 
-    # handle move out for source and destination locations
-    handledMoveOutForSource = False
-    handledMoveOutForDest = False
-    while not handledMoveOutForSource or not handledMoveOutForDest:
-        ioNameValues = []
-
-        # handle move out for source location
-        if not handledMoveOutForSource and graphQLClient.GetControllerIOVariable('moveOutLocation1Container'):
-            ioNameValues += [
-                ('location1ContainerId', ''),     # reset container ID
-                ('location1HasContainer', False), # hasContainer set False
-            ]
-            handledMoveOutForSource = True
-            print('Moved out source location.')
-
-        # handle move in for destination location
-        if not handledMoveOutForDest and graphQLClient.GetControllerIOVariable('moveOutLocation2Container'):
-            ioNameValues += [
-                ('location2ContainerId', ''),      # reset container ID
-                ('location2HasContainer', False), # hasContainer set False
-            ]
-            handledMoveOutForDest = True
-            print('Moved out destination location.')
-
-        # set ioNameValues over graphQL
-        if len(ioNameValues) > 0:
-            graphQLClient.SetControllerIOVariables(ioNameValues)
-        time.sleep(0.1)
-
-    # read the order result
-    resultEntry = None
-    while resultEntry is None:
-        resultEntry = orderManager.ReadNextOrderResult()
-    print('Read order result: %r' % orderEntry)
+        await asyncio.sleep(0.01) # sleep this coroutine to allow other coroutines to run
 
 if __name__ == "__main__":
-    _Main()
+    asyncio.run(_Main())
