@@ -14,7 +14,7 @@ class MujinGraphqlClient(object):
     _websocket = None # WebSocketClientProtocol, used to subscribe to IO changes on Mujin controller
     robotBridgeState = None # dict storing last received RobotBridgesState from subscription
 
-    def __init__(self, host='localhost:1234', username='mujin', password='mujin'):
+    def __init__(self, host='localhost', username='mujin', password='mujin'):
         self._httpUrl = 'http://%s/api/v2/graphql' % host
         self._websocketUrl = 'ws://%s/api/v2/graphql' % host
         self.robotBridgeState = {}
