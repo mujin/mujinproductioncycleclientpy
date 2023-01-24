@@ -71,7 +71,7 @@ async def StartProductionCycle(graphqlClient):
 
     # wait for production cycle to start running
     while not graphqlClient.sentIoMap.get('isRunningProductionCycle'):
-        await asyncio.sleep(0.01) # sleep this coroutine to allow other coroutines to run
+        await asyncio.sleep(0) # non-blocking sleep, allow next scheduled coroutine to run
 
     # set trigger off
     graphqlClient.SetControllerIOVariables([
@@ -112,7 +112,7 @@ async def DequeueOrderResults(orderManager):
         if (resultEntry := orderManager.DequeueOrderResult()) is not None:
             print('Read order result: %r' % resultEntry)
 
-        await asyncio.sleep(0.01) # sleep this coroutine to allow other coroutines to run
+        await asyncio.sleep(0) # non-blocking sleep, allow next scheduled coroutine to run
 
 async def HandleLocationMove(graphqlClient, locationName, containerId, containerIdIOName, hasContainerIOName, moveInIOName, moveOutIOName):
     """ Handles state management of a location upon move-in and move-out request sent from Mujin.
@@ -154,7 +154,7 @@ async def HandleLocationMove(graphqlClient, locationName, containerId, container
         if len(ioNameValues) > 0:
             graphqlClient.SetControllerIOVariables(ioNameValues)
 
-        await asyncio.sleep(0.01) # sleep this coroutine to allow other coroutines to run
+        await asyncio.sleep(0) # non-blocking sleep, allow next scheduled coroutine to run
 
 if __name__ == "__main__":
     asyncio.run(_Main())

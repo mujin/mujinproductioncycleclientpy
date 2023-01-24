@@ -253,7 +253,7 @@ class ProductionCycleOrderManager(object):
                     initializedOrderPointers = False
                     if time.time() - starttime > timeout:
                         raise Exception('Production cycle order queue pointers are invalid, "%s" signal has value %r' % (orderPointerIOName, pointerValue))
-                await asyncio.sleep(0.01) # sleep this coroutine to allow other coroutines to run
+                await asyncio.sleep(0) # non-blocking sleep, allow next scheduled coroutine to run
 
     def QueueOrder(self, orderEntry):
         """ Queues an order entry to the order queue.
