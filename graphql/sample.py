@@ -30,14 +30,28 @@ async def _ManageProductionCycle(graphqlClient):
     await StartProductionCycle(graphqlClient)
 
     # queue an order
-    orderEntry = QueueOrder(orderManager)
+    sourceLocationName = 'sc1'
+    destLocationName = 'dc1'
+    sourceContainerId = 'source0001'
+    destContainerId = 'dest0001'
+
+    orderEntry = {
+        'orderUniqueId': 'order0001',
+        'orderNumber': 1,
+        'orderPickContainerId': sourceContainerId,
+        'orderPlaceContainerId': destContainerId,
+        'orderPickLocationName': sourceLocationName,
+        'orderPlaceLocationName': destLocationName,
+    }
+    orderManager.QueueOrder(orderEntry)
+    print('Queued order: %r' % orderEntry)
 
     await asyncio.gather(
         # handle location move in and out for source location
         HandleLocationMove(
             graphqlClient=graphqlClient,
-            locationName='source',
-            containerId=orderEntry['orderPickContainerId'], # use containerId from the queued order request
+            locationName=sourceLocationName,
+            containerId=sourceContainerId, # use containerId matching the queued order request
             containerIdIOName='location1ContainerId',
             hasContainerIOName='location1HasContainer',
             moveInIOName='moveInLocation1Container',
@@ -46,8 +60,8 @@ async def _ManageProductionCycle(graphqlClient):
         # handle location move in and out for destination location
         HandleLocationMove(
             graphqlClient,
-            locationName='destination',
-            containerId=orderEntry['orderPlaceContainerId'], # use containerId from the queued order request
+            locationName=destLocationName,
+            containerId=destContainerId, # use containerId matching the queued order request
             containerIdIOName='location2ContainerId',
             hasContainerIOName='location2HasContainer',
             moveInIOName='moveInLocation2Container',
@@ -77,29 +91,6 @@ async def StartProductionCycle(graphqlClient):
     graphqlClient.SetControllerIOVariables([
         ('startProductionCycle', False)
     ])
-
-def QueueOrder(orderManager):
-    """ Queues an order to order request queue.
-
-    Args:
-        orderManager (ProductionCycleOrderManager): For queuing order requests and managing order pointers.
-
-    Returns:
-        dict: Order information that was queued.
-    """
-    sourceContainerId = 'source0001'
-    destContainerId = 'dest0001'
-    orderEntry = {
-        'orderUniqueId': 'order0001',
-        'orderPickContainerId': sourceContainerId,
-        'orderPlaceContainerId': destContainerId,
-        'orderNumber': 1,
-        'orderPickLocationName': 'sc1',
-        'orderPlaceLocationName': 'dc1',
-    }
-    orderManager.QueueOrder(orderEntry)
-    print('Queued order: %r' % orderEntry)
-    return orderEntry
 
 async def DequeueOrderResults(orderManager):
     """ Dequeues order results in the order result queue.
