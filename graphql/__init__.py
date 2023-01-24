@@ -1,17 +1,17 @@
+import asyncio
 import base64
 import json
 import requests
 import time
-from python_graphql_client import GraphqlClient
+import websockets
 
 class MujinGraphqlClient(object):
-    _httpUrl = None # URL to http GraphQL endpoint on Mujin controller
-    _headers = None # request headers information
-    _cookies = None # request cookies information
+    _websocketUrl = None # URL to websocket GraphQL endpoint on Mujin controller
+    _httpUrl = None      # URL to http GraphQL endpoint on Mujin controller
+    _headers = None      # request headers information
+    _cookies = None      # request cookies information
 
-    _websocketUrl = None           # URL to websocket GraphQL endpoint on Mujin controller
-    _websocketGraphqlClient = None # instance of GraphqlClient
-
+    _websocket = None # WebSocketClientProtocol, used to subscribe to IO changes on Mujin controller
     robotBridgeState = None # dict storing last received RobotBridgesState from subscription
 
     def __init__(self, host='localhost:1234', username='mujin', password='mujin'):
@@ -31,11 +31,6 @@ class MujinGraphqlClient(object):
             'csrftoken': 'token'
         }
 
-        self._websocketGraphqlClient = GraphqlClient(
-            endpoint=self._websocketUrl,
-            headers=self._headers,
-        )
-
     @property
     def receivedIoMap(self):
         return dict(self.robotBridgeState.get('receivediovalues', {}))
@@ -45,6 +40,8 @@ class MujinGraphqlClient(object):
         return dict(self.robotBridgeState.get('sentiovalues', {}))
 
     async def SubscribeRobotBridgesState(self):
+        """ Subscribes to IO changes on Mujin controller.
+        """
         query = """
             subscription {
                 SubscribeRobotBridgesState {
@@ -53,11 +50,41 @@ class MujinGraphqlClient(object):
                 }
             }
         """
+        # create the client for executing the subscription
+        async def _Subscribe(callbackFunction):
+            async with websockets.connect(
+                uri=self._websocketUrl,
+                subprotocols=['graphql-ws'],
+                extra_headers=self._headers,
+            ) as websocket:
+                self.websocket = websocket
+                # send the WebSocket connection initialization request
+                await websocket.send(json.dumps({'type': 'connection_init', 'payload': {}}))
+
+                # start a new subscription on the WebSocket connection
+                await websocket.send(json.dumps({'type': 'start', 'payload': {'query': query}}))
+
+                # read incoming messages
+                async for response in websocket:
+                    data = json.loads(response)
+                    if data['type'] == 'connection_ack':
+                        print('received connection-acknowledge ("connection_ack") message')
+                    elif data['type'] == 'ka':
+                        # received keep-alive "ka" message
+                        pass
+                    else:
+                        # call the calback function to process the payload
+                        callbackFunction(data['payload'])
+
+                # stop the subscription on the WebSocket connection
+                await websocket.send(json.dumps({"type": "stop", "payload": {}}))
+
         def _Callback(response):
             # update with response robotBridgeState
             robotBridgeState = response.get('data', {}).get('SubscribeRobotBridgesState') or {}
             self.robotBridgeState.update(robotBridgeState)
-        await self._websocketGraphqlClient.subscribe(query=query, handle=_Callback)
+
+        await _Subscribe(_Callback)
 
     def SetControllerIOVariables(self, ioNameValues):
         """ Sends GraphQL query to set IO variables to Mujin controller.
@@ -182,7 +209,6 @@ class ProductionCycleOrderManager(object):
 
     def __init__(self, graphQLClient):
         self._graphQLClient = graphQLClient
-        self.InitializeOrderPointers()
 
     def _IncrementPointer(self, pointerValue):
         """ Increments value for an order queue pointer. Wraps around length of order queue.
@@ -198,7 +224,7 @@ class ProductionCycleOrderManager(object):
             pointerValue = 1
         return pointerValue
 
-    def InitializeOrderPointers(self, timeout=5):
+    async def InitializeOrderPointers(self, timeout=5):
         """ Sends GraphQL query to get order queue pointers and order queue length
         """
         starttime = time.time()
@@ -227,6 +253,7 @@ class ProductionCycleOrderManager(object):
                     initializedOrderPointers = False
                     if time.time() - starttime > timeout:
                         raise Exception('Production cycle order queue pointers are invalid, "%s" signal has value %r' % (orderPointerIOName, pointerValue))
+                await asyncio.sleep(0.01) # sleep this coroutine to allow other coroutines to run
 
     def QueueOrder(self, orderEntry):
         """ Queues an order entry to the order queue.
